@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  slack-task-tracker:
+    build: .
+    container_name: slack-task-tracker
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - sqlite_data:/data
+      - ./src:/app/src
+      - ./package.json:/app/package.json
+      - ./package-lock.json:/app/package-lock.json
+      - ./tsconfig.json:/app/tsconfig.json
+      - node_modules:/app/node_modules
+
+volumes:
+  sqlite_data:
+    name: slack-task-tracker-data
+  node_modules: 
