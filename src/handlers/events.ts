@@ -1,34 +1,16 @@
 import { SlackEventMiddlewareArgs, AllMiddlewareArgs } from '@slack/bolt';
-import { getDB, getTaskStates, isValidStateTransition } from '../db';
+import { getDB, getTaskStates } from '../db';
 import { scanChannelHistory } from '../utils/channel';
 import { DBTask, TaskState } from '../types';
 
-export async function handleReactionAdded({ event, say, client }: SlackEventMiddlewareArgs<'reaction_added'> & AllMiddlewareArgs) {
+export async function handleReactionAdded({ event, say, client }: SlackEventMiddlewareArgs<'reaction_added'> & AllMiddlewareArgs): Promise<void> {
   try {
-    console.log('\n=== New Reaction Event ===');
-    console.log('Reaction event received:', {
-      reaction: event.reaction,
-      user: event.user,
-      item: event.item,
-      eventTs: event.event_ts
-    });
-
     const db = await getDB();
     const { reaction, user, item } = event;
 
-    // Get all states and their emojis
     const states = await getTaskStates();
-    console.log('\n=== Available States ===');
-    console.log(states);
-    
     const stateByEmoji = new Map(states.map(s => [s.emoji, s]));
-    const targetState = stateByEmoji.get(reaction);
-    
-    console.log('\n=== State Matching ===');
-    console.log('Target state for reaction:', {
-      reaction,
-      targetState: targetState ? targetState.name : 'not found'
-    });
+    const targetState = reaction ? stateByEmoji.get(reaction) : undefined;
     
     if (!targetState) {
       console.log('❌ No matching state found for reaction:', reaction);
@@ -41,7 +23,7 @@ export async function handleReactionAdded({ event, say, client }: SlackEventMidd
     } catch (error: any) {
       if (error.code === 'not_in_channel') {
         await say({
-          text: `⚠️ I need to be invited to this channel first. Please use \`/invite @Task Tracker\``,
+          text: '⚠️ I need to be invited to this channel first. Please use `/invite @Task Tracker`',
           thread_ts: item.ts
         });
         return;
@@ -54,33 +36,25 @@ export async function handleReactionAdded({ event, say, client }: SlackEventMidd
       'SELECT * FROM tasks WHERE messageTs = ? AND channel = ?',
       [item.ts, item.channel]
     );
-    
-    console.log('\n=== Task Lookup ===');
-    console.log('Existing task check:', {
-      exists: !!existingTask,
-      messageTs: item.ts,
-      channel: item.channel
-    });
 
     if (!existingTask) {
-      console.log('\n=== Task Creation Check ===');
-      console.log('Can create new task?', {
-        targetStateOrder: targetState.order_num,
-        canCreate: targetState.order_num === 1,
-        result: targetState.order_num === 1 ? '✅ Yes' : '❌ No'
+      // Get message reactions to find highest state
+      const result = await client.reactions.get({
+        channel: item.channel,
+        timestamp: item.ts
       });
       
-      // Only allow task creation with the first ordered state
-      if (targetState.order_num === 1) {
-        // Fetch message content
-        const result = await client.conversations.history({
-          channel: item.channel,
-          latest: item.ts,
-          limit: 1,
-          inclusive: true
-        });
-        
-        const message = result.messages?.[0];
+      const message = result.message;
+      const reactions = message?.reactions || [];
+      
+      const highestState = reactions
+        .map(r => r.name ? stateByEmoji.get(r.name) : undefined)
+        .filter((s): s is TaskState => s !== undefined)
+        .reduce<TaskState | null>((highest, current) => 
+          !highest || current.order_num > highest.order_num ? current : highest
+        , null);
+
+      if (highestState) {
         const messageText = message?.text || '';
         const truncatedText = messageText.length > 50 ? `${messageText.slice(0, 47)}...` : messageText;
         const authInfo = await client.auth.test();
@@ -90,7 +64,7 @@ export async function handleReactionAdded({ event, say, client }: SlackEventMidd
           user,
           messageTs: item.ts,
           channel: item.channel,
-          status: targetState.name,
+          status: highestState.name,
           createdAt: now,
           stateChangedAt: now,
           stateChangedBy: user
@@ -103,16 +77,30 @@ export async function handleReactionAdded({ event, say, client }: SlackEventMidd
         );
         
         await say({
-          text: `Task created by <@${user}> with status *${targetState.name}*\n>${truncatedText}\n<${messageLink}|Jump to task>`,
+          text: `Task created by <@${user}> with status *${highestState.name}*\n>${truncatedText}\n<${messageLink}|Jump to task>`,
           thread_ts: item.ts
         });
-        console.log('✅ Task created successfully');
       }
       return;
     }
 
-    // Check if the state transition is allowed
-    if (await isValidStateTransition(existingTask.status, targetState.name)) {
+    // Update existing task to highest state
+    const result = await client.reactions.get({
+      channel: item.channel,
+      timestamp: item.ts
+    });
+    
+    const message = result.message;
+    const reactions = message?.reactions || [];
+    
+    const highestState = reactions
+      .map(r => r.name ? stateByEmoji.get(r.name) : undefined)
+      .filter((s): s is TaskState => s !== undefined)
+      .reduce<TaskState | null>((highest, current) => 
+        !highest || current.order_num > highest.order_num ? current : highest
+      , null);
+
+    if (highestState && highestState.name !== existingTask.status) {
       await db.run(
         `UPDATE tasks 
          SET status = ?, stateChangedAt = ?, stateChangedBy = ?,
@@ -120,39 +108,22 @@ export async function handleReactionAdded({ event, say, client }: SlackEventMidd
              completedBy = CASE WHEN ? = 1 THEN ? ELSE completedBy END
          WHERE messageTs = ? AND channel = ?`,
         [
-          targetState.name,
+          highestState.name,
           now,
           user,
-          targetState.isTerminal ? 1 : 0,
-          targetState.isTerminal ? now : null,
-          targetState.isTerminal ? 1 : 0,
-          targetState.isTerminal ? user : null,
+          highestState.isTerminal ? 1 : 0,
+          highestState.isTerminal ? now : null,
+          highestState.isTerminal ? 1 : 0,
+          highestState.isTerminal ? user : null,
           item.ts,
           item.channel
         ]
       );
       
       await say({
-        text: `Task status changed to *${targetState.name}* by <@${user}>`,
+        text: `Task status changed to *${highestState.name}* by <@${user}>`,
         thread_ts: item.ts
       });
-    } else {
-      // Log the error details to console
-      console.error('Invalid state transition:', {
-        from: existingTask.status,
-        to: targetState.name,
-        user,
-        messageTs: item.ts,
-        channel: item.channel
-      });
-
-      // Only show error in Slack if trying to move to a different state
-      if (existingTask.status !== targetState.name) {
-        await say({
-          text: `Cannot change task from *${existingTask.status}* to *${targetState.name}*`,
-          thread_ts: item.ts
-        });
-      }
     }
   } catch (error) {
     console.error('Reaction Handler Error:', error);
@@ -163,26 +134,14 @@ export async function handleReactionAdded({ event, say, client }: SlackEventMidd
   }
 }
 
-export async function handleReactionRemoved({ event, say, client }: SlackEventMiddlewareArgs<'reaction_removed'> & AllMiddlewareArgs) {
+export async function handleReactionRemoved({ event, say, client }: SlackEventMiddlewareArgs<'reaction_removed'> & AllMiddlewareArgs): Promise<void> {
   try {
-    console.log('\n=== Reaction Removed Event ===');
-    console.log('Reaction removed:', {
-      reaction: event.reaction,
-      user: event.user,
-      item: event.item,
-      eventTs: event.event_ts
-    });
-
     const db = await getDB();
     const { reaction, user, item } = event;
 
-    // Get all states and their emojis
     const states = await getTaskStates();
-    console.log('\n=== Available States ===');
-    console.log(states);
-    
     const stateByEmoji = new Map(states.map(s => [s.emoji, s]));
-    const removedState = stateByEmoji.get(reaction);
+    const removedState = reaction ? stateByEmoji.get(reaction) : undefined;
     
     if (!removedState) {
       console.log('❌ No matching state found for removed reaction:', reaction);
@@ -195,7 +154,7 @@ export async function handleReactionRemoved({ event, say, client }: SlackEventMi
     } catch (error: any) {
       if (error.code === 'not_in_channel') {
         await say({
-          text: `⚠️ I need to be invited to this channel first. Please use \`/invite @Task Tracker\``,
+          text: '⚠️ I need to be invited to this channel first. Please use `/invite @Task Tracker`',
           thread_ts: item.ts
         });
         return;
@@ -208,10 +167,23 @@ export async function handleReactionRemoved({ event, say, client }: SlackEventMi
       [item.ts, item.channel]
     );
 
-    // Only react if this is the current state being removed
-    if (task && task.status === removedState.name) {
-      if (removedState.order_num === 1) {
-        // If removing the initial state reaction, delete the task
+    if (task) {
+      const result = await client.reactions.get({
+        channel: item.channel,
+        timestamp: item.ts
+      });
+      
+      const message = result.message;
+      const reactions = message?.reactions || [];
+      
+      const highestState = reactions
+        .map(r => r.name ? stateByEmoji.get(r.name) : undefined)
+        .filter((s): s is TaskState => s !== undefined)
+        .reduce<TaskState | null>((highest, current) => 
+          !highest || current.order_num > highest.order_num ? current : highest
+        , null);
+
+      if (!highestState) {
         await db.run(
           'DELETE FROM tasks WHERE messageTs = ? AND channel = ?',
           [item.ts, item.channel]
@@ -221,28 +193,31 @@ export async function handleReactionRemoved({ event, say, client }: SlackEventMi
           text: `Task deleted by <@${user}>`,
           thread_ts: item.ts
         });
-        console.log('Task deleted successfully');
-      } else {
-        // For other states, revert to previous state
-        const previousState = states.find(s => 
-          s.order_num < removedState.order_num && 
-          s.allowedTransitionsTo.includes(removedState.name)
+      } else if (highestState.name !== task.status) {
+        const now = new Date().toISOString();
+        await db.run(
+          `UPDATE tasks 
+           SET status = ?, stateChangedAt = ?, stateChangedBy = ?,
+               completedAt = CASE WHEN ? = 1 THEN ? ELSE completedAt END,
+               completedBy = CASE WHEN ? = 1 THEN ? ELSE completedBy END
+           WHERE messageTs = ? AND channel = ?`,
+          [
+            highestState.name,
+            now,
+            user,
+            highestState.isTerminal ? 1 : 0,
+            highestState.isTerminal ? now : null,
+            highestState.isTerminal ? 1 : 0,
+            highestState.isTerminal ? user : null,
+            item.ts,
+            item.channel
+          ]
         );
 
-        if (previousState) {
-          const now = new Date().toISOString();
-          await db.run(
-            `UPDATE tasks 
-             SET status = ?, stateChangedAt = ?, stateChangedBy = ?
-             WHERE messageTs = ? AND channel = ?`,
-            [previousState.name, now, user, item.ts, item.channel]
-          );
-
-          await say({
-            text: `Task reverted to *${previousState.name}* by <@${user}>`,
-            thread_ts: item.ts
-          });
-        }
+        await say({
+          text: `Task reverted to *${highestState.name}* by <@${user}>`,
+          thread_ts: item.ts
+        });
       }
     }
   } catch (error) {

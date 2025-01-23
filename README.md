@@ -64,20 +64,16 @@ docker-compose up --build
 
 ### Task Management
 1. Create tasks by adding reactions:
-   - 👀 (`:eyes:`) - Create new task
-   - 🔨 (`:hammer:`) - Mark as in progress
-   - 🔍 (`:mag:`) - Mark as ready for review
-   - ✅ (`:white_check_mark:`) - Mark as completed
+   - 👀 (`:eyes:`) - Open state
+   - 🔨 (`:hammer:`) - Working state
+   - 🔍 (`:mag:`) - Review state
+   - ✅ (`:white_check_mark:`) - Finished state
 
-2. Task Workflow:
-   - Start by adding 👀 to create a new task
-   - Add 🔨 when someone starts working on it
-   - Add 🔍 when the work is done and needs review
-   - Add ✅ when the review is complete and task is done
-
-3. Remove reactions to:
-   - Remove 👀 to delete the task
-   - Remove other reactions to revert to previous state
+2. Task State Behavior:
+   - Task state is determined by the highest-order state emoji present
+   - Multiple state emojis can be present - highest one wins
+   - Removing all state emojis deletes the task
+   - Removing state emojis reverts to next highest state present
 
 4. Available commands:
    - `/tasks` - List all active tasks (only visible to you)

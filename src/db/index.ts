@@ -113,15 +113,4 @@ export async function getDB() {
 export async function getTaskStates(): Promise<TaskState[]> {
   const db = await getDB();
   return db.all<TaskState[]>('SELECT * FROM task_states ORDER BY order_num');
-}
-
-export async function isValidStateTransition(fromState: string, toState: string): Promise<boolean> {
-  const db = await getDB();
-  const state = await db.get(
-    'SELECT allowed_transitions FROM task_states WHERE name = ?',
-    [fromState]
-  );
-  
-  if (!state?.allowed_transitions) return false;
-  return state.allowed_transitions.split(',').includes(toState);
 } 
