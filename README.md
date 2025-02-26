@@ -2,12 +2,12 @@
 
 Track and manage tasks using emoji reactions with customizable workflows.
 
-**Author:** Marius Krasauskas ([@vividbro](https://github.com/vividbro))
+**Author:** Marius Krasauskas ([@xkrasauskas](https://github.com/xkrasauskas))
 
 ## Quick Start
 ```bash
 # Clone the repository
-git clone https://github.com/vividbro/slack-task-tracker.git
+git clone https://github.com/xkrasauskas/slack-task-tracker.git
 cd slack-task-tracker
 
 # Follow setup instructions below
