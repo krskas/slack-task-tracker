@@ -27,7 +27,6 @@ Thumbs.db
 # Database files
 *.db
 *.db-journal
-/data/
 
 # Logs
 logs/
@@ -44,5 +43,5 @@ temp/
 docker_data/
 
 # Data
-data/
-data/.gitkeep
+data/*
+!data/.gitkeep
