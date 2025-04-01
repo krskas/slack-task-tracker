@@ -6,13 +6,5 @@ services:
     env_file: .env
     restart: unless-stopped
     volumes:
-      - sqlite_data:/data
-      - ./src:/app/src
-      - ./package.json:/app/package.json
-      - ./package-lock.json:/app/package-lock.json
-      - ./tsconfig.json:/app/tsconfig.json
+      - ./data:/data
       - /app/node_modules
-
-volumes:
-  sqlite_data:
-    name: slack-task-tracker-data
